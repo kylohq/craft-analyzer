@@ -1,0 +1,16 @@
+{
+  "Author": "Yuki XIV",
+  "Name": "CraftAnalyzer",
+  "InternalName": "CraftAnalyzer",
+  "Punchline": "True Crafting Cost Analyzer for FFXIV.",
+  "Description": "Calculates the raw material cost of crafted items using Universalis market data.",
+  "ApplicableVersion": "any",
+  "RepoUrl": "https://github.com/kylohq/craft-analyzer",
+  "DalamudApiLevel": 15,
+  "Tags": [
+    "crafting",
+    "cost",
+    "analyzer",
+    "market"
+  ]
+}
