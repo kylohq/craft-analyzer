@@ -38,6 +38,9 @@ public class MainWindow : Window, IDisposable
 
     private bool hasTargetListings = true;
     private string playerWorldName = "N/A";
+    
+    // Tracks items marked to be gathered manually, excluding them from cost analysis.
+    private HashSet<uint> itemsToGather = new();
 
     public MainWindow(Plugin plugin)
         : base("CraftAnalyzer##MainWindow", ImGuiWindowFlags.NoScrollbar)
@@ -62,6 +65,7 @@ public class MainWindow : Window, IDisposable
         if (itemId == 0) return;
         
         searchItemId = itemId;
+        itemsToGather.Clear(); // Reset gathered items when switching to a new target
         UpdateItemName();
         IsOpen = true;
         _ = RunAnalysisAsync();
@@ -157,7 +161,7 @@ public class MainWindow : Window, IDisposable
                 {
                     craftQuantity = 999;
                 }
-                _ = RunAnalysisAsync();
+                RefreshCalculations();
             }
             
             ImGui.Spacing();
@@ -210,63 +214,73 @@ public class MainWindow : Window, IDisposable
     }
 
     /// <summary>
-    /// Coordinates the data fetching and calculation process.
+    /// Recalculates costs based on currently cached price and inventory data.
+    /// This is called when local state (quantity, gather list) changes to avoid redundant API calls.
+    /// </summary>
+    private void RefreshCalculations()
+    {
+        totalMaterialCost = 0;
+        foreach (var mat in materials)
+        {
+            if (prices.TryGetValue(mat.Key, out var priceData))
+            {
+                int inInventory = inventoryCounts.GetValueOrDefault(mat.Key, 0);
+                float totalRequired = mat.Value * craftQuantity;
+                float needed = Math.Max(0, totalRequired - inInventory);
+                
+                // Exclude cost if the item is marked as "to be gathered"
+                if (!itemsToGather.Contains(mat.Key))
+                {
+                    totalMaterialCost += needed * priceData.Price;
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Coordinates the data fetching process. Local calculations are deferred to RefreshCalculations.
     /// </summary>
     private async Task RunAnalysisAsync()
     {
         isLoading = true;
-        materials.Clear();
-        prices.Clear();
-        totalMaterialCost = 0;
-        targetItemPrice = 0;
-        hasTargetListings = true;
-        salesVelocity = 0;
-        inventoryCounts.Clear();
 
         try
         {
-            materials = Plugin.RecipeParser.GetBaseMaterials(searchItemId);
+            var newMaterials = Plugin.RecipeParser.GetBaseMaterials(searchItemId);
+            if (newMaterials.Count == 0) return;
 
-            if (materials.Count > 0)
-            {
-                var materialIds = materials.Keys.ToList();
-                var materialsTask = Plugin.Universalis.GetRegionPricesAsync(materialIds);
-                
-                var player = Plugin.ObjectTable.LocalPlayer;
-                uint homeWorldId = player?.HomeWorld.RowId ?? 0;
-                playerWorldName = (player != null && homeWorldId != 0) ? player.HomeWorld.Value.Name.ToString() : "N/A";
-                var targetTask = homeWorldId != 0 
-                    ? Plugin.Universalis.GetWorldPriceAsync(homeWorldId, searchItemId)
-                    : Task.FromResult((Price: 0, HasListings: false, SalesPerDay: 0.0f));
+            materials = newMaterials;
+            var materialIds = materials.Keys.ToList();
+            
+            // Initiate parallel market data requests
+            var materialsTask = Plugin.Universalis.GetRegionPricesAsync(materialIds);
+            
+            var player = Plugin.ObjectTable.LocalPlayer;
+            uint homeWorldId = player?.HomeWorld.RowId ?? 0;
+            playerWorldName = (player != null && homeWorldId != 0) ? player.HomeWorld.Value.Name.ToString() : "N/A";
+            
+            var targetTask = homeWorldId != 0 
+                ? Plugin.Universalis.GetWorldPriceAsync(homeWorldId, searchItemId)
+                : Task.FromResult((Price: 0, HasListings: false, SalesPerDay: 0.0f));
 
-                UpdateInventoryCounts(materialIds);
+            UpdateInventoryCounts(materialIds);
 
-                await Task.WhenAll(materialsTask, targetTask);
+            await Task.WhenAll(materialsTask, targetTask);
 
-                var materialPrices = await materialsTask;
-                totalMaterialCost = 0;
-                foreach (var mat in materials)
-                {
-                    if (materialPrices.TryGetValue(mat.Key, out var priceData))
-                    {
-                        prices[mat.Key] = priceData;
-                        
-                        int inInventory = inventoryCounts.GetValueOrDefault(mat.Key, 0);
-                        float totalRequired = mat.Value * craftQuantity;
-                        float needed = Math.Max(0, totalRequired - inInventory);
-                        totalMaterialCost += needed * priceData.Price;
-                    }
-                }
+            // Update local cache with fresh data
+            prices = await materialsTask;
+            var targetResult = await targetTask;
+            
+            targetItemPrice = targetResult.Price;
+            hasTargetListings = targetResult.HasListings;
+            salesVelocity = targetResult.SalesPerDay;
 
-                var targetResult = await targetTask;
-                targetItemPrice = targetResult.Price;
-                hasTargetListings = targetResult.HasListings;
-                salesVelocity = targetResult.SalesPerDay;
-            }
+            // Finalize with local calculations
+            RefreshCalculations();
         }
         catch (Exception ex)
         {
-            Plugin.Log.Error(ex, "Analysis process failed.");
+            Plugin.Log.Error(ex, "Analysis process failed. Preserving last known data.");
         }
         finally
         {
@@ -279,10 +293,11 @@ public class MainWindow : Window, IDisposable
     /// </summary>
     private void DrawResultsTable()
     {
-        using var table = ImRaii.Table("AnalysisTable", 6, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.Resizable | ImGuiTableFlags.ScrollY, new Vector2(0, 250 * ImGuiHelpers.GlobalScale));
+        using var table = ImRaii.Table("AnalysisTable", 7, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.Resizable | ImGuiTableFlags.ScrollY, new Vector2(0, 250 * ImGuiHelpers.GlobalScale));
         if (table.Success)
         {
             ImGui.TableSetupColumn("Material", ImGuiTableColumnFlags.WidthStretch);
+            ImGui.TableSetupColumn("Gather", ImGuiTableColumnFlags.WidthFixed, 50 * ImGuiHelpers.GlobalScale);
             ImGui.TableSetupColumn("Have", ImGuiTableColumnFlags.WidthFixed, 50 * ImGuiHelpers.GlobalScale);
             ImGui.TableSetupColumn("Need", ImGuiTableColumnFlags.WidthFixed, 50 * ImGuiHelpers.GlobalScale);
             ImGui.TableSetupColumn("Price", ImGuiTableColumnFlags.WidthFixed, 80 * ImGuiHelpers.GlobalScale);
@@ -323,6 +338,16 @@ public class MainWindow : Window, IDisposable
                 }
 
                 ImGui.TableNextColumn();
+                bool isGathered = itemsToGather.Contains(mat.Key);
+                if (ImGui.Checkbox($"##Gather{mat.Key}", ref isGathered))
+                {
+                    if (isGathered) itemsToGather.Add(mat.Key);
+                    else itemsToGather.Remove(mat.Key);
+                    
+                    RefreshCalculations();
+                }
+
+                ImGui.TableNextColumn();
                 int inInventory = inventoryCounts.GetValueOrDefault(mat.Key, 0);
                 ImGui.Text(inInventory.ToString());
 
@@ -340,8 +365,15 @@ public class MainWindow : Window, IDisposable
                 ImGui.TextColored(new Vector4(0.7f, 0.7f, 1, 1), world);
 
                 ImGui.TableNextColumn();
-                float subtotal = needed * price;
-                ImGui.Text($"{subtotal:N0}g");
+                if (itemsToGather.Contains(mat.Key))
+                {
+                    ImGui.TextDisabled("Gathered");
+                }
+                else
+                {
+                    float subtotal = needed * price;
+                    ImGui.Text($"{subtotal:N0}g");
+                }
             }
         }
     }
