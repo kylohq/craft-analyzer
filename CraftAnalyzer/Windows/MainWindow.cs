@@ -147,8 +147,16 @@ public class MainWindow : Window, IDisposable
             
             ImGui.SameLine();
             ImGui.SetNextItemWidth(100 * ImGuiHelpers.GlobalScale);
-            if (ImGui.SliderInt("Quantity##CraftQty", ref craftQuantity, 1, 99))
+            if (ImGui.InputInt("Quantity##CraftQty", ref craftQuantity, 0))
             {
+                if (craftQuantity < 1)
+                {
+                    craftQuantity = 1;
+                }
+                else if (craftQuantity > 999)
+                {
+                    craftQuantity = 999;
+                }
                 _ = RunAnalysisAsync();
             }
             
