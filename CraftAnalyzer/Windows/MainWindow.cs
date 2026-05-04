@@ -326,7 +326,7 @@ public class MainWindow : Window, IDisposable
                     ImGui.Text(name);
                 }
                 
-                if (ImGui.IsItemClicked(ImGuiMouseButton.Right))
+                if (ImGui.IsItemClicked(ImGuiMouseButton.Left))
                 {
                     ImGui.SetClipboardText(name);
                     Plugin.ToastGui.ShowNormal($"Copied '{name}' to clipboard");
@@ -334,17 +334,24 @@ public class MainWindow : Window, IDisposable
                 
                 if (ImGui.IsItemHovered())
                 {
-                    ImGui.SetTooltip("Right-click to copy name");
+                    ImGui.SetTooltip("Left-click to copy name");
                 }
 
                 ImGui.TableNextColumn();
-                bool isGathered = itemsToGather.Contains(mat.Key);
-                if (ImGui.Checkbox($"##Gather{mat.Key}", ref isGathered))
+                if (Plugin.RecipeParser.IsGatherable(mat.Key))
                 {
-                    if (isGathered) itemsToGather.Add(mat.Key);
-                    else itemsToGather.Remove(mat.Key);
-                    
-                    RefreshCalculations();
+                    bool isGathered = itemsToGather.Contains(mat.Key);
+                    if (ImGui.Checkbox($"##Gather{mat.Key}", ref isGathered))
+                    {
+                        if (isGathered) itemsToGather.Add(mat.Key);
+                        else itemsToGather.Remove(mat.Key);
+                        
+                        RefreshCalculations();
+                    }
+                }
+                else
+                {
+                    ImGui.TextDisabled("N/A");
                 }
 
                 ImGui.TableNextColumn();
@@ -496,9 +503,70 @@ public class MainWindow : Window, IDisposable
         }
 
         ImGui.Spacing();
-        if (ImGui.Button("Force Refresh All Prices", new Vector2(-1, 35 * ImGuiHelpers.GlobalScale)))
+        
+        using (var group = ImRaii.Group())
         {
-            _ = RunAnalysisAsync();
+            if (ImGui.Button("Force Refresh Prices", new Vector2(ImGui.GetContentRegionAvail().X / 2 - 4 * ImGuiHelpers.GlobalScale, 35 * ImGuiHelpers.GlobalScale)))
+            {
+                _ = RunAnalysisAsync();
+            }
+            
+            ImGui.SameLine();
+            
+            if (ImGui.Button("Export to TeamCraft", new Vector2(-1, 35 * ImGuiHelpers.GlobalScale)))
+            {
+                ExportToTeamCraft();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Encodes the current gathering list into a TeamCraft import URL and opens it in the browser.
+    /// </summary>
+    private void ExportToTeamCraft()
+    {
+        if (itemsToGather.Count == 0)
+        {
+            Plugin.ToastGui.ShowError("Mark some materials as 'Gathered' first.");
+            return;
+        }
+
+        var exportItems = new List<string>();
+        foreach (var matId in itemsToGather)
+        {
+            if (materials.TryGetValue(matId, out var perCraftAmount))
+            {
+                int inInventory = inventoryCounts.GetValueOrDefault(matId, 0);
+                float totalRequired = perCraftAmount * craftQuantity;
+                int needed = (int)Math.Ceiling(Math.Max(0, totalRequired - inInventory));
+                
+                if (needed > 0)
+                {
+                    // TeamCraft format: itemId,recipeId(null),quantity
+                    exportItems.Add($"{matId},null,{needed}");
+                }
+            }
+        }
+
+        if (exportItems.Count == 0)
+        {
+            Plugin.ToastGui.ShowError("No items to export (all required items are already in your inventory)");
+            return;
+        }
+
+        try
+        {
+            string exportString = string.Join(";", exportItems);
+            string base64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(exportString));
+            string url = $"https://ffxivteamcraft.com/import/{base64}";
+            
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url) { UseShellExecute = true });
+            Plugin.ToastGui.ShowNormal("Opening TeamCraft import page...");
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error(ex, "Failed to open TeamCraft URL");
+            Plugin.ToastGui.ShowError("Could not open browser. Link copied to clipboard.");
         }
     }
 }

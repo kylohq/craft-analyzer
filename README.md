@@ -17,6 +17,8 @@ It then compares that cost against the lowest selling price of the item on your 
 * **Smart Recipe Parsing:** Accurately accounts for recipe yields (e.g., crafting x3 Ingots) so your per-unit math is always flawless. 
 * **Home World Profit Margins:** Compares your regional material costs against the selling price on your specific Home World, color-coding your net profit in green or red.
 * **Search UI:** Includes a standalone search bar to manually look up items if you don't have them on hand.
+* **TeamCraft Integration**: Click the **"Export to TeamCraft"** button to automatically generate a TeamCraft import link for all items you need to gather.
+* **Smart Gathering Tracking**: Check the box next to each material to mark it as "To Be Gathered". The plugin will automatically adjust costs, exclude those items from total cost.
 
 ## 📥 Installation
 This plugin is only distributed via a Custom Repository, because a lot of it is written by AI and moderated by myself. For any suggestions/bugs please use GitHub discussions or add me on Discord at rxfio.

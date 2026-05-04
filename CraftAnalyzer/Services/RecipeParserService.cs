@@ -11,11 +11,13 @@ public class RecipeParserService
 {
     private readonly IDataManager dataManager;
     private readonly Dictionary<uint, Recipe> itemToRecipe = new();
+    private readonly HashSet<uint> gatherableItems = new();
 
     public RecipeParserService(IDataManager dataManager)
     {
         this.dataManager = dataManager;
         InitializeRecipeMap();
+        InitializeGatherableMap();
     }
 
     /// <summary>
@@ -37,6 +39,39 @@ public class RecipeParserService
             }
         }
     }
+
+    /// <summary>
+    /// Scans gathering sheets to identify items that can be obtained via Miner, Botanist, or Fisher.
+    /// </summary>
+    private void InitializeGatherableMap()
+    {
+        // Miner and Botanist
+        var gatheringSheet = dataManager.GetExcelSheet<GatheringItem>();
+        if (gatheringSheet != null)
+        {
+            foreach (var gather in gatheringSheet)
+            {
+                if (gather.Item.RowId != 0)
+                    gatherableItems.Add(gather.Item.RowId);
+            }
+        }
+        
+        // Fisher (Spearfishing)
+        var spearfishingSheet = dataManager.GetExcelSheet<SpearfishingItem>();
+        if (spearfishingSheet != null)
+        {
+            foreach (var fish in spearfishingSheet)
+            {
+                if (fish.Item.RowId != 0)
+                    gatherableItems.Add(fish.Item.RowId);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Determines if an item is gatherable via standard gathering professions.
+    /// </summary>
+    public bool IsGatherable(uint itemId) => gatherableItems.Contains(itemId);
 
     /// <summary>
     /// Determines if an item is craftable.
