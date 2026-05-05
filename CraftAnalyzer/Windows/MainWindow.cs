@@ -390,6 +390,7 @@ public class MainWindow : Window, IDisposable
     /// </summary>
     private unsafe void UpdateInventoryCounts(List<uint> itemIds)
     {
+        inventoryCounts.Clear();
         var invManager = InventoryManager.Instance();
         if (invManager == null) return;
 
