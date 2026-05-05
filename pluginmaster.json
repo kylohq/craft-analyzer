@@ -3,7 +3,7 @@
     "Author": "Yuki XIV",
     "Name": "CraftAnalyzer",
     "InternalName": "CraftAnalyzer",
-    "AssemblyVersion": "1.0.1.0",
+    "AssemblyVersion": "1.0.1.1",
     "Description": "Calculates the raw material cost of crafted items using Universalis market data.",
     "ApplicableVersion": "any",
     "RepoUrl": "https://github.com/kylohq/craft-analyzer",
