@@ -42,6 +42,7 @@ public class MainWindow : Window, IDisposable
 
     private bool hasTargetListings = true;
     private string playerWorldName = "N/A";
+    private bool lastFetchFailed = false;
     
     // Tracks items marked to be gathered manually, excluding them from cost analysis.
     private HashSet<uint> itemsToGather = new();
@@ -276,6 +277,14 @@ public class MainWindow : Window, IDisposable
             }
             else if (materialDataList.Count > 0)
             {
+                if (lastFetchFailed)
+                {
+                    ImGui.PushStyleColor(ImGuiCol.Text, new Vector4(1, 0.4f, 0.4f, 1));
+                    ImGui.TextWrapped("Market data request failed. Showing last known or empty prices.");
+                    ImGui.PopStyleColor();
+                    ImGui.Spacing();
+                }
+
                 DrawResultsTable();
                 
                 ImGui.Spacing();
@@ -415,6 +424,7 @@ public class MainWindow : Window, IDisposable
     private async Task RunAnalysisAsync()
     {
         isLoading = true;
+        lastFetchFailed = false;
 
         try
         {
@@ -503,12 +513,19 @@ public class MainWindow : Window, IDisposable
                 targetPricesHomeWorld[searchItemId] = (int)targetItemPrice;
             }
 
-            // Perform initial local calculations
+            // Finalize with local calculations
             RecomputeMaterials();
+            
+            // If we have materials but no prices were fetched, something went wrong
+            if (idsToQuery.Count > 0 && prices.Count == 0)
+            {
+                lastFetchFailed = true;
+            }
         }
         catch (Exception ex)
         {
             Plugin.Log.Error(ex, "Analysis process failed. Preserving last known data.");
+            lastFetchFailed = true;
         }
         finally
         {
@@ -598,12 +615,21 @@ public class MainWindow : Window, IDisposable
 
                 // Unit Price
                 ImGui.TableNextColumn();
-                int price = prices.TryGetValue(mat.ItemId, out var priceData) ? priceData.Price : 0;
-                ImGui.Text($"{price:N0}g");
+                bool hasPrice = prices.TryGetValue(mat.ItemId, out var priceData);
+                int price = hasPrice ? priceData.Price : 0;
+                
+                if (hasPrice)
+                {
+                    ImGui.Text($"{price:N0}g");
+                }
+                else
+                {
+                    ImGui.TextDisabled(lastFetchFailed ? "???" : "N/A");
+                }
 
                 // Server
                 ImGui.TableNextColumn();
-                string world = prices.TryGetValue(mat.ItemId, out var worldData) ? worldData.World : "N/A";
+                string world = prices.TryGetValue(mat.ItemId, out var worldData) ? worldData.World : (lastFetchFailed ? "Error" : "N/A");
                 ImGui.TextColored(new Vector4(0.7f, 0.7f, 1, 1), world);
 
                 // Subtotal
