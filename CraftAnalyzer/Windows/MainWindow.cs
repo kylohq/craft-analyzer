@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
+using System.Text;
 using System.Threading.Tasks;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Textures;
@@ -11,6 +12,7 @@ using Dalamud.Interface.Windowing;
 using Lumina.Excel.Sheets;
 using Dalamud.Plugin.Services;
 using FFXIVClientStructs.FFXIV.Client.Game;
+using CraftAnalyzer.Models;
 
 namespace CraftAnalyzer.Windows;
 
@@ -24,10 +26,12 @@ public class MainWindow : Window, IDisposable
     private string itemName = "No item selected";
     
     private bool isLoading = false;
-    private Dictionary<uint, float> materials = new();
+    private List<MaterialData> materialDataList = new();
     private Dictionary<uint, (int Price, string World)> prices = new();
-    private float totalMaterialCost = 0;
-    private float targetItemPrice = 0;
+    private float totalMaterialCost = 0; // Cumulative cost of materials to buy
+    private float targetItemPrice = 0;    // Market price of the primary target item
+    private float totalMarketValue = 0;   // Summed market value of all items in current plan
+    private Dictionary<uint, int> targetPricesHomeWorld = new(); // Cached home-world prices for cart items
 
     private string searchInput = "";
     private List<Item> searchResults = new();
@@ -41,6 +45,8 @@ public class MainWindow : Window, IDisposable
     
     // Tracks items marked to be gathered manually, excluding them from cost analysis.
     private HashSet<uint> itemsToGather = new();
+
+    private bool isCartMode = false;
 
     public MainWindow(Plugin plugin)
         : base("CraftAnalyzer##MainWindow", ImGuiWindowFlags.NoScrollbar)
@@ -73,9 +79,15 @@ public class MainWindow : Window, IDisposable
 
     public override void Draw()
     {
-        DrawSearchSection();
-        ImGui.Separator();
-        DrawResultsSection();
+        using var scroll = ImRaii.Child("MainScroll", Vector2.Zero, false);
+        if (scroll.Success)
+        {
+            DrawSearchSection();
+            ImGui.Spacing();
+            DrawShoppingCartSection();
+            ImGui.Separator();
+            DrawResultsSection();
+        }
     }
     
     /// <summary>
@@ -83,11 +95,19 @@ public class MainWindow : Window, IDisposable
     /// </summary>
     private void DrawSearchSection()
     {
-        ImGui.Text("Search Item:");
-        ImGui.SetNextItemWidth(-1);
-        if (ImGui.InputTextWithHint("##SearchInput", "Start typing item name...", ref searchInput, 100))
+        using (var group = ImRaii.Group())
         {
-            UpdateSearchResults();
+            ImGui.TextColored(new Vector4(1, 0.8f, 0.2f, 1), "ITEM SEARCH");
+            ImGui.SameLine();
+            ImGui.TextDisabled("|");
+            ImGui.SameLine();
+            ImGui.TextDisabled("Find items to add to your plan");
+            
+            ImGui.SetNextItemWidth(-1);
+            if (ImGui.InputTextWithHint("##SearchInput", "Search by name (e.g. 'Exarchic', 'Coffee')...", ref searchInput, 100))
+            {
+                UpdateSearchResults();
+            }
         }
 
         if (searchResults.Count > 0)
@@ -113,15 +133,93 @@ public class MainWindow : Window, IDisposable
             {
                 if (Plugin.RecipeParser.IsCraftable(selectedId))
                 {
-                    OpenWithItem(selectedId);
+                    plugin.AddToCart(selectedId);
                     searchInput = "";
                     searchResults.Clear();
+                    RecomputeMaterials(); // Instant update when adding
                 }
                 else
                 {
                     Plugin.ToastGui.ShowError("Item is not craftable");
                 }
             }
+        }
+        
+        ImGui.Spacing();
+        ImGui.Separator();
+        ImGui.Spacing();
+    }
+
+    /// <summary>
+    /// Renders the shopping cart management interface.
+    /// </summary>
+    private void DrawShoppingCartSection()
+    {
+        ImGui.TextColored(new Vector4(0.4f, 0.8f, 1f, 1f), "SHOPPING CART");
+        ImGui.SameLine();
+        ImGui.TextDisabled("|");
+        ImGui.SameLine();
+        ImGui.TextDisabled($"{plugin.ShoppingCart.Count} items in current plan");
+        
+        ImGui.Spacing();
+
+        using (var table = ImRaii.Table("CartTable", 3, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.NoHostExtendX))
+        {
+            if (table.Success)
+            {
+                ImGui.TableSetupColumn("Item Name", ImGuiTableColumnFlags.WidthStretch);
+                ImGui.TableSetupColumn("Quantity", ImGuiTableColumnFlags.WidthFixed, 80 * ImGuiHelpers.GlobalScale);
+                ImGui.TableSetupColumn(" ", ImGuiTableColumnFlags.WidthFixed, 30 * ImGuiHelpers.GlobalScale);
+                ImGui.TableHeadersRow();
+
+                for (int i = 0; i < plugin.ShoppingCart.Count; i++)
+                {
+                    var item = plugin.ShoppingCart[i];
+                    ImGui.TableNextRow();
+                    
+                    ImGui.TableNextColumn();
+                    uint iconId = Plugin.DataManager.GetExcelSheet<Item>().TryGetRow(item.ItemId, out var row) ? row.Icon : 0u;
+                    var icon = Plugin.TextureProvider.GetFromGameIcon(new GameIconLookup(iconId)).GetWrapOrEmpty();
+                    ImGui.Image(icon.Handle, new Vector2(20, 20) * ImGuiHelpers.GlobalScale);
+                    ImGui.SameLine();
+                    ImGui.Text(item.Name);
+                    
+                    ImGui.TableNextColumn();
+                    ImGui.SetNextItemWidth(-1);
+                    int qty = item.Quantity;
+                    if (ImGui.InputInt($"##Qty{i}", ref qty, 0))
+                    {
+                        item.Quantity = Math.Max(1, qty);
+                        RecomputeMaterials();
+                    }
+                    
+                    ImGui.TableNextColumn();
+                    ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.6f, 0.2f, 0.2f, 0.6f));
+                    if (ImGui.Button($"X##Remove{i}", new Vector2(24, 24) * ImGuiHelpers.GlobalScale))
+                    {
+                        plugin.ShoppingCart.RemoveAt(i);
+                        i--; // Adjust index after removal
+                        RecomputeMaterials();
+                    }
+                    ImGui.PopStyleColor();
+                }
+            }
+        }
+
+        if (plugin.ShoppingCart.Count == 0)
+        {
+            ImGui.TextDisabled("   (Add items from search or context menu to begin)");
+        }
+        else
+        {
+            ImGui.Spacing();
+            ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.2f, 0.4f, 0.6f, 1f));
+            if (ImGui.Button("Calculate Craft Cost", new Vector2(-1, 35 * ImGuiHelpers.GlobalScale)))
+            {
+                isCartMode = true;
+                _ = RunAnalysisAsync();
+            }
+            ImGui.PopStyleColor();
         }
     }
 
@@ -134,34 +232,37 @@ public class MainWindow : Window, IDisposable
         {
             if (!child.Success) return;
 
-            if (searchItemId == 0)
+            if (searchItemId == 0 && !isCartMode)
             {
                 ImGui.TextWrapped("Select a craftable item above or right-click one in-game.");
                 return;
             }
 
-            var targetIcon = Plugin.DataManager.GetExcelSheet<Item>().TryGetRow(searchItemId, out var row) ? row.Icon : 0u;
-            var targetIconTex = Plugin.TextureProvider.GetFromGameIcon(new GameIconLookup(targetIcon)).GetWrapOrEmpty();
-            
-            ImGui.Image(targetIconTex.Handle, new Vector2(32, 32) * ImGuiHelpers.GlobalScale);
-            ImGui.SameLine();
-            
-            ImGui.TextColored(new Vector4(1, 0.8f, 0, 1), $"{itemName}");
-            ImGui.TextDisabled($"(ID: {searchItemId})");
-            
-            ImGui.SameLine();
-            ImGui.SetNextItemWidth(100 * ImGuiHelpers.GlobalScale);
-            if (ImGui.InputInt("Quantity##CraftQty", ref craftQuantity, 0))
+            if (isCartMode)
             {
-                if (craftQuantity < 1)
+                ImGui.TextColored(new Vector4(0.4f, 0.8f, 1f, 1f), "COST ANALYSIS");
+                ImGui.SameLine();
+                ImGui.TextDisabled("|");
+                ImGui.SameLine();
+                ImGui.TextDisabled($"{plugin.ShoppingCart.Count} items added");
+            }
+            else
+            {
+                ImGui.TextColored(new Vector4(1, 0.8f, 0.2f, 1), "ITEM ANALYSIS");
+                ImGui.SameLine();
+                ImGui.TextDisabled("|");
+                ImGui.SameLine();
+                ImGui.TextColored(new Vector4(1, 1, 1, 1), $"{itemName}");
+                
+                ImGui.SameLine();
+                ImGui.SetNextItemWidth(60 * ImGuiHelpers.GlobalScale);
+                if (ImGui.InputInt("##CraftQty", ref craftQuantity, 0))
                 {
-                    craftQuantity = 1;
+                    craftQuantity = Math.Clamp(craftQuantity, 1, 999);
+                    RecomputeMaterials();
                 }
-                else if (craftQuantity > 999)
-                {
-                    craftQuantity = 999;
-                }
-                RefreshCalculations();
+                ImGui.SameLine();
+                ImGui.TextDisabled("ct.");
             }
             
             ImGui.Spacing();
@@ -173,9 +274,31 @@ public class MainWindow : Window, IDisposable
                 string dots = new string('.', (int)(time * 2) % 4);
                 ImGui.Text(dots);
             }
-            else if (materials.Count > 0)
+            else if (materialDataList.Count > 0)
             {
                 DrawResultsTable();
+                
+                ImGui.Spacing();
+                using (var group = ImRaii.Group())
+                {
+                    ImGui.PushStyleVar(ImGuiStyleVar.FrameRounding, 4f);
+                    if (ImGui.Button("Copy Shopping List", new Vector2(ImGui.GetContentRegionAvail().X / 3 - 4 * ImGuiHelpers.GlobalScale, 30 * ImGuiHelpers.GlobalScale)))
+                    {
+                        CopyMaterialListToClipboard();
+                    }
+                    ImGui.SameLine();
+                    if (ImGui.Button("Refresh Prices", new Vector2(ImGui.GetContentRegionAvail().X / 2 - 4 * ImGuiHelpers.GlobalScale, 30 * ImGuiHelpers.GlobalScale)))
+                    {
+                        _ = RunAnalysisAsync();
+                    }
+                    ImGui.SameLine();
+                    if (ImGui.Button("TeamCraft Import", new Vector2(-1, 30 * ImGuiHelpers.GlobalScale)))
+                    {
+                        ExportToTeamCraft();
+                    }
+                    ImGui.PopStyleVar();
+                }
+                
                 DrawProfitMargin();
             }
         }
@@ -214,22 +337,71 @@ public class MainWindow : Window, IDisposable
     }
 
     /// <summary>
+    /// Re-runs the material aggregation and inventory check without performing fresh API requests.
+    /// This is used for instantaneous updates when quantities change.
+    /// </summary>
+    private void RecomputeMaterials()
+    {
+        if (materialDataList.Count == 0 && !isCartMode) return;
+
+        Dictionary<uint, int> aggregate;
+        if (isCartMode)
+        {
+            // Recalculate the entire recursive material tree for all items in the shopping cart
+            aggregate = Plugin.RecipeParser.GetAggregateMaterials(plugin.ShoppingCart);
+            
+            // Re-calculate projected revenue based on current quantities and cached home-world prices
+            totalMarketValue = 0;
+            foreach (var item in plugin.ShoppingCart)
+            {
+                if (targetPricesHomeWorld.TryGetValue(item.ItemId, out var price))
+                {
+                    totalMarketValue += (float)price * item.Quantity;
+                }
+            }
+        }
+        else
+        {
+            // Calculate material requirements for a single item multi-crafted N times
+            var single = Plugin.RecipeParser.GetBaseMaterials(searchItemId, craftQuantity);
+            aggregate = single.ToDictionary(k => k.Key, v => (int)Math.Ceiling(v.Value));
+            totalMarketValue = targetItemPrice * craftQuantity;
+        }
+
+        var itemIds = aggregate.Keys.ToList();
+        UpdateInventoryCounts(itemIds);
+
+        materialDataList.Clear();
+        foreach (var kvp in aggregate)
+        {
+            var itemRow = Plugin.DataManager.GetExcelSheet<Item>().GetRow(kvp.Key);
+            materialDataList.Add(new MaterialData(
+                kvp.Key,
+                itemRow.Name.ToString(),
+                kvp.Value,
+                inventoryCounts.GetValueOrDefault(kvp.Key, 0)
+            ));
+        }
+
+        RefreshCalculations();
+    }
+
+    /// <summary>
     /// Recalculates costs based on currently cached price and inventory data.
     /// This is called when local state (quantity, gather list) changes to avoid redundant API calls.
     /// </summary>
     private void RefreshCalculations()
     {
         totalMaterialCost = 0;
-        foreach (var mat in materials)
+        
+        foreach (var mat in materialDataList)
         {
-            if (prices.TryGetValue(mat.Key, out var priceData))
+            if (prices.TryGetValue(mat.ItemId, out var priceData))
             {
-                int inInventory = inventoryCounts.GetValueOrDefault(mat.Key, 0);
-                float totalRequired = mat.Value * craftQuantity;
-                float needed = Math.Max(0, totalRequired - inInventory);
+                int needed = Math.Max(0, mat.TotalNeeded - mat.AmountOwned);
                 
                 // Exclude cost if the item is marked as "to be gathered"
-                if (!itemsToGather.Contains(mat.Key))
+                if (!itemsToGather.Contains(mat.ItemId))
                 {
                     totalMaterialCost += needed * priceData.Price;
                 }
@@ -246,26 +418,57 @@ public class MainWindow : Window, IDisposable
 
         try
         {
-            var newMaterials = Plugin.RecipeParser.GetBaseMaterials(searchItemId);
-            if (newMaterials.Count == 0) return;
+            Dictionary<uint, int> aggregate;
+            if (isCartMode)
+            {
+                aggregate = Plugin.RecipeParser.GetAggregateMaterials(plugin.ShoppingCart);
+            }
+            else
+            {
+                var single = Plugin.RecipeParser.GetBaseMaterials(searchItemId, craftQuantity);
+                aggregate = single.ToDictionary(k => k.Key, v => (int)Math.Ceiling(v.Value));
+            }
 
-            materials = newMaterials;
-            var materialIds = materials.Keys.ToList();
+            if (aggregate.Count == 0) return;
+
+            var itemIds = aggregate.Keys.ToList();
+            UpdateInventoryCounts(itemIds);
+
+            materialDataList.Clear();
+            foreach (var kvp in aggregate)
+            {
+                var itemRow = Plugin.DataManager.GetExcelSheet<Item>().GetRow(kvp.Key);
+                materialDataList.Add(new MaterialData(
+                    kvp.Key,
+                    itemRow.Name.ToString(),
+                    kvp.Value,
+                    inventoryCounts.GetValueOrDefault(kvp.Key, 0)
+                ));
+            }
+
+            // Query prices for ALL materials in the list to ensure we have data if quantities change
+            var idsToQuery = materialDataList.Select(m => m.ItemId).ToList();
             
             // Initiate parallel market data requests
-            var materialsTask = Plugin.Universalis.GetRegionPricesAsync(materialIds);
+            var materialsTask = idsToQuery.Count > 0 
+                ? Plugin.Universalis.GetRegionPricesAsync(idsToQuery)
+                : Task.FromResult(new Dictionary<uint, (int Price, string World)>());
             
             var player = Plugin.ObjectTable.LocalPlayer;
             uint homeWorldId = player?.HomeWorld.RowId ?? 0;
             playerWorldName = (player != null && homeWorldId != 0) ? player.HomeWorld.Value.Name.ToString() : "N/A";
             
-            var targetTask = homeWorldId != 0 
-                ? Plugin.Universalis.GetWorldPriceAsync(homeWorldId, searchItemId)
-                : Task.FromResult((Price: 0, HasListings: false, SalesPerDay: 0.0f));
-
-            UpdateInventoryCounts(materialIds);
-
-            await Task.WhenAll(materialsTask, targetTask);
+            Task<(int Price, bool HasListings, float SalesPerDay)> targetTask;
+            if (!isCartMode)
+            {
+                targetTask = homeWorldId != 0 
+                    ? Plugin.Universalis.GetWorldPriceAsync(homeWorldId, searchItemId)
+                    : Task.FromResult((Price: 0, HasListings: false, SalesPerDay: 0.0f));
+            }
+            else
+            {
+                targetTask = Task.FromResult((Price: 0, HasListings: false, SalesPerDay: 0.0f));
+            }
 
             // Update local cache with fresh data
             prices = await materialsTask;
@@ -275,8 +478,33 @@ public class MainWindow : Window, IDisposable
             hasTargetListings = targetResult.HasListings;
             salesVelocity = targetResult.SalesPerDay;
 
-            // Finalize with local calculations
-            RefreshCalculations();
+            // Cache individual item prices for the home world to support instant scaling
+            targetPricesHomeWorld.Clear();
+            if (isCartMode)
+            {
+                var targetPricesTasks = new List<Task<(int Price, bool HasListings, float SalesPerDay)>>();
+                foreach (var item in plugin.ShoppingCart)
+                {
+                    targetPricesTasks.Add(homeWorldId != 0 
+                        ? Plugin.Universalis.GetWorldPriceAsync(homeWorldId, item.ItemId)
+                        : Task.FromResult((Price: 0, HasListings: false, SalesPerDay: 0.0f)));
+                }
+
+                var targetPricesResults = await Task.WhenAll(targetPricesTasks);
+                for (int i = 0; i < plugin.ShoppingCart.Count; i++)
+                {
+                    uint itemId = plugin.ShoppingCart[i].ItemId;
+                    int price = targetPricesResults[i].Price;
+                    targetPricesHomeWorld[itemId] = price;
+                }
+            }
+            else
+            {
+                targetPricesHomeWorld[searchItemId] = (int)targetItemPrice;
+            }
+
+            // Perform initial local calculations
+            RecomputeMaterials();
         }
         catch (Exception ex)
         {
@@ -293,28 +521,28 @@ public class MainWindow : Window, IDisposable
     /// </summary>
     private void DrawResultsTable()
     {
-        using var table = ImRaii.Table("AnalysisTable", 7, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.Resizable | ImGuiTableFlags.ScrollY, new Vector2(0, 250 * ImGuiHelpers.GlobalScale));
+        using var table = ImRaii.Table("AnalysisTable", 8, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.Resizable | ImGuiTableFlags.ScrollY, new Vector2(0, 250 * ImGuiHelpers.GlobalScale));
         if (table.Success)
         {
-            ImGui.TableSetupColumn("Material", ImGuiTableColumnFlags.WidthStretch);
+            ImGui.TableSetupColumn("Material Name", ImGuiTableColumnFlags.WidthStretch);
             ImGui.TableSetupColumn("Gather", ImGuiTableColumnFlags.WidthFixed, 50 * ImGuiHelpers.GlobalScale);
-            ImGui.TableSetupColumn("Have", ImGuiTableColumnFlags.WidthFixed, 50 * ImGuiHelpers.GlobalScale);
-            ImGui.TableSetupColumn("Need", ImGuiTableColumnFlags.WidthFixed, 50 * ImGuiHelpers.GlobalScale);
-            ImGui.TableSetupColumn("Price", ImGuiTableColumnFlags.WidthFixed, 80 * ImGuiHelpers.GlobalScale);
-            ImGui.TableSetupColumn("Cheapest Server", ImGuiTableColumnFlags.WidthFixed, 100 * ImGuiHelpers.GlobalScale);
+            ImGui.TableSetupColumn("Needed", ImGuiTableColumnFlags.WidthFixed, 60 * ImGuiHelpers.GlobalScale);
+            ImGui.TableSetupColumn("Owned", ImGuiTableColumnFlags.WidthFixed, 60 * ImGuiHelpers.GlobalScale);
+            ImGui.TableSetupColumn("To Buy", ImGuiTableColumnFlags.WidthFixed, 60 * ImGuiHelpers.GlobalScale);
+            ImGui.TableSetupColumn("Unit Price", ImGuiTableColumnFlags.WidthFixed, 80 * ImGuiHelpers.GlobalScale);
+            ImGui.TableSetupColumn("Server", ImGuiTableColumnFlags.WidthFixed, 90 * ImGuiHelpers.GlobalScale);
             ImGui.TableSetupColumn("Subtotal", ImGuiTableColumnFlags.WidthFixed, 90 * ImGuiHelpers.GlobalScale);
             ImGui.TableHeadersRow();
 
-            foreach (var mat in materials.OrderByDescending(m => m.Value * (prices.ContainsKey(m.Key) ? prices[m.Key].Price : 0)))
+            foreach (var mat in materialDataList.OrderByDescending(m => Math.Max(0, m.TotalNeeded - m.AmountOwned) * (prices.ContainsKey(m.ItemId) ? prices[m.ItemId].Price : 0)))
             {
                 ImGui.TableNextRow();
                 
+                // Material Name
                 ImGui.TableNextColumn();
                 uint iconId = 0;
-                string name = mat.Key.ToString();
-                if (Plugin.DataManager.GetExcelSheet<Item>().TryGetRow(mat.Key, out var itemRow))
+                if (Plugin.DataManager.GetExcelSheet<Item>().TryGetRow(mat.ItemId, out var itemRow))
                 {
-                    name = itemRow.Name.ToString();
                     iconId = itemRow.Icon;
                 }
                 
@@ -323,13 +551,13 @@ public class MainWindow : Window, IDisposable
                     var iconTex = Plugin.TextureProvider.GetFromGameIcon(new GameIconLookup(iconId)).GetWrapOrEmpty();
                     ImGui.Image(iconTex.Handle, new Vector2(20, 20) * ImGuiHelpers.GlobalScale);
                     ImGui.SameLine();
-                    ImGui.Text(name);
+                    ImGui.Text(mat.Name);
                 }
                 
                 if (ImGui.IsItemClicked(ImGuiMouseButton.Left))
                 {
-                    ImGui.SetClipboardText(name);
-                    Plugin.ToastGui.ShowNormal($"Copied '{name}' to clipboard");
+                    ImGui.SetClipboardText(mat.Name);
+                    Plugin.ToastGui.ShowNormal($"Copied '{mat.Name}' to clipboard");
                 }
                 
                 if (ImGui.IsItemHovered())
@@ -337,14 +565,15 @@ public class MainWindow : Window, IDisposable
                     ImGui.SetTooltip("Left-click to copy name");
                 }
 
+                // Gather Checkbox
                 ImGui.TableNextColumn();
-                if (Plugin.RecipeParser.IsGatherable(mat.Key))
+                if (Plugin.RecipeParser.IsGatherable(mat.ItemId))
                 {
-                    bool isGathered = itemsToGather.Contains(mat.Key);
-                    if (ImGui.Checkbox($"##Gather{mat.Key}", ref isGathered))
+                    bool isGathered = itemsToGather.Contains(mat.ItemId);
+                    if (ImGui.Checkbox($"##Gather{mat.ItemId}", ref isGathered))
                     {
-                        if (isGathered) itemsToGather.Add(mat.Key);
-                        else itemsToGather.Remove(mat.Key);
+                        if (isGathered) itemsToGather.Add(mat.ItemId);
+                        else itemsToGather.Remove(mat.ItemId);
                         
                         RefreshCalculations();
                     }
@@ -354,34 +583,67 @@ public class MainWindow : Window, IDisposable
                     ImGui.TextDisabled("N/A");
                 }
 
+                // Needed
                 ImGui.TableNextColumn();
-                int inInventory = inventoryCounts.GetValueOrDefault(mat.Key, 0);
-                ImGui.Text(inInventory.ToString());
+                ImGui.Text(mat.TotalNeeded.ToString());
 
+                // Owned
                 ImGui.TableNextColumn();
-                float totalRequired = mat.Value * craftQuantity;
-                float needed = Math.Max(0, totalRequired - inInventory);
-                ImGui.TextColored(needed > 0 ? new Vector4(1, 0.5f, 0.5f, 1) : new Vector4(0.5f, 1, 0.5f, 1), $"{(int)Math.Ceiling(needed)}");
+                ImGui.Text(mat.AmountOwned.ToString());
 
+                // To Buy
                 ImGui.TableNextColumn();
-                int price = prices.TryGetValue(mat.Key, out var priceData) ? priceData.Price : 0;
-                string world = prices.TryGetValue(mat.Key, out var worldData) ? worldData.World : "N/A";
+                int toBuy = Math.Max(0, mat.TotalNeeded - mat.AmountOwned);
+                ImGui.TextColored(toBuy > 0 ? new Vector4(1, 0.5f, 0.5f, 1) : new Vector4(0.5f, 1, 0.5f, 1), $"{toBuy}");
+
+                // Unit Price
+                ImGui.TableNextColumn();
+                int price = prices.TryGetValue(mat.ItemId, out var priceData) ? priceData.Price : 0;
                 ImGui.Text($"{price:N0}g");
 
+                // Server
                 ImGui.TableNextColumn();
+                string world = prices.TryGetValue(mat.ItemId, out var worldData) ? worldData.World : "N/A";
                 ImGui.TextColored(new Vector4(0.7f, 0.7f, 1, 1), world);
 
+                // Subtotal
                 ImGui.TableNextColumn();
-                if (itemsToGather.Contains(mat.Key))
+                if (toBuy == 0)
                 {
-                    ImGui.TextDisabled("Gathered");
+                    ImGui.TextDisabled("0g");
                 }
                 else
                 {
-                    float subtotal = needed * price;
+                    long subtotal = (long)toBuy * price;
                     ImGui.Text($"{subtotal:N0}g");
                 }
             }
+        }
+    }
+
+    /// <summary>
+    /// Builds a formatted string of the materials the user needs to buy and copies it to the clipboard.
+    /// </summary>
+    private void CopyMaterialListToClipboard()
+    {
+        var sb = new StringBuilder();
+        foreach (var mat in materialDataList)
+        {
+            int toBuy = Math.Max(0, mat.TotalNeeded - mat.AmountOwned);
+            if (toBuy > 0)
+            {
+                sb.AppendLine($"x{toBuy} {mat.Name}");
+            }
+        }
+
+        if (sb.Length > 0)
+        {
+            ImGui.SetClipboardText(sb.ToString().TrimEnd());
+            Plugin.ToastGui.ShowNormal("Copied shopping list to clipboard!");
+        }
+        else
+        {
+            Plugin.ToastGui.ShowNormal("Nothing to buy!");
         }
     }
     
@@ -431,71 +693,75 @@ public class MainWindow : Window, IDisposable
         ImGui.Separator();
         ImGui.Spacing();
 
-        ImGui.TextColored(new Vector4(0.5f, 1, 0.5f, 1), "Market Value Analysis");
+        if (isCartMode)
+        {
+            ImGui.TextColored(new Vector4(0.4f, 0.8f, 1f, 1f), "ESTIMATED PROFIT");
+        }
+        else
+        {
+            ImGui.TextColored(new Vector4(0.5f, 1, 0.5f, 1), "ESTIMATED ITEM PROFIT");
+        }
+        
         ImGui.SameLine();
-        ImGui.TextDisabled($"(On {playerWorldName})");
+        ImGui.TextDisabled($"(Market: {playerWorldName})");
         ImGui.Spacing();
 
-        using (var summaryChild = ImRaii.Child("SummaryArea", new Vector2(0, 160 * ImGuiHelpers.GlobalScale), true))
+        using (var summaryChild = ImRaii.Child("SummaryArea", new Vector2(0, 130 * ImGuiHelpers.GlobalScale), true))
         {
             if (summaryChild.Success)
             {
                 ImGui.Columns(2, "ProfitColumns", false);
-                ImGui.SetColumnWidth(0, 300 * ImGuiHelpers.GlobalScale);
+                ImGui.SetColumnWidth(0, 280 * ImGuiHelpers.GlobalScale);
 
-                ImGui.Text("Current Market Price:");
+                ImGui.TextDisabled("Projected Revenue");
                 
-                if (hasTargetListings)
+                if (isCartMode || hasTargetListings)
                 {
-                    ImGui.TextColored(new Vector4(1, 1, 0, 1), $"{targetItemPrice:N0} Gil");
-                    ImGui.SameLine();
-                    ImGui.TextDisabled($"x {craftQuantity}");
+                    ImGui.TextColored(new Vector4(1, 0.9f, 0, 1), $"{totalMarketValue:N0} Gil");
                 }
                 else
                 {
-                    ImGui.TextColored(new Vector4(1, 0.4f, 0.4f, 1), $"No Listings on {playerWorldName}");
+                    ImGui.TextColored(new Vector4(1, 0.4f, 0.4f, 1), $"No Listings");
                 }
                 
-                ImGui.Text("Market Health:");
-                ImGui.SameLine();
-                string healthText = salesVelocity switch
+                if (!isCartMode)
                 {
-                    > 10 => "Excellent (High Velocity)",
-                    > 3 => "Good (Steady Sales)",
-                    > 0.5f => "Moderate (Slow)",
-                    _ => "Poor (Stagnant)"
-                };
-                ImGui.TextColored(salesVelocity > 3 ? new Vector4(0, 1, 0, 1) : new Vector4(1, 1, 0, 1), healthText);
-                ImGui.TextDisabled($"({salesVelocity:F1} sales / day)");
+                    ImGui.TextDisabled("Market Velocity");
+                    string healthText = salesVelocity switch
+                    {
+                        > 10 => "High",
+                        > 3 => "Steady",
+                        > 0.5f => "Moderate",
+                        _ => "Low"
+                    };
+                    ImGui.TextColored(salesVelocity > 3 ? new Vector4(0, 1, 0, 1) : new Vector4(1, 1, 0, 1), healthText);
+                    ImGui.SameLine();
+                    ImGui.TextDisabled($"({salesVelocity:F1}/d)");
+                }
 
                 ImGui.NextColumn();
                 
-                ImGui.Text("Total Material Cost:");
-                ImGui.TextColored(new Vector4(1, 0.5f, 0, 1), $"{totalMaterialCost:N0} Gil");
-                ImGui.TextDisabled("(Items you don't already have)");
+                ImGui.TextDisabled("Acquisition Cost");
+                ImGui.TextColored(new Vector4(1, 0.6f, 0.4f, 1), $"{totalMaterialCost:N0} Gil");
 
                 ImGui.Columns(1);
                 ImGui.Separator();
 
-                float totalPrice = targetItemPrice * craftQuantity;
-                float tax = totalPrice * 0.05f;
-                float profit = totalPrice - totalMaterialCost - tax;
-                Vector4 profitColor = (profit >= 0 && hasTargetListings) ? new Vector4(0.2f, 1, 0.2f, 1) : new Vector4(1, 0.3f, 0.3f, 1);
+                float tax = totalMarketValue * 0.05f;
+                float profit = totalMarketValue - totalMaterialCost - tax;
+                Vector4 profitColor = profit >= 0 ? new Vector4(0.4f, 1, 0.4f, 1) : new Vector4(1, 0.3f, 0.3f, 1);
 
                 ImGui.Spacing();
-                ImGui.Text("Estimated Profit:");
-                ImGui.SameLine();
-                
-                string profitText = hasTargetListings ? $"{profit:N0} Gil" : "N/A";
-                ImGui.TextColored(profitColor, profitText);
+                ImGui.Text("NET PROFIT");
                 ImGui.SameLine();
                 ImGui.TextDisabled("(After 5% MB Tax)");
-
-                if (targetItemPrice > 0 && hasTargetListings)
+                
+                ImGui.TextColored(profitColor, $"{profit:N0} Gil");
+                if (totalMarketValue > 0)
                 {
-                    float percentage = (profit / totalPrice) * 100;
                     ImGui.SameLine();
-                    ImGui.TextDisabled($"({percentage:F1}%)");
+                    float percentage = (profit / totalMarketValue) * 100;
+                    ImGui.TextColored(profitColor * 0.8f, $"({percentage:F1}%)");
                 }
 
                 ImGui.Spacing();
@@ -504,21 +770,6 @@ public class MainWindow : Window, IDisposable
         }
 
         ImGui.Spacing();
-        
-        using (var group = ImRaii.Group())
-        {
-            if (ImGui.Button("Force Refresh Prices", new Vector2(ImGui.GetContentRegionAvail().X / 2 - 4 * ImGuiHelpers.GlobalScale, 35 * ImGuiHelpers.GlobalScale)))
-            {
-                _ = RunAnalysisAsync();
-            }
-            
-            ImGui.SameLine();
-            
-            if (ImGui.Button("Export to TeamCraft", new Vector2(-1, 35 * ImGuiHelpers.GlobalScale)))
-            {
-                ExportToTeamCraft();
-            }
-        }
     }
 
     /// <summary>
@@ -533,18 +784,16 @@ public class MainWindow : Window, IDisposable
         }
 
         var exportItems = new List<string>();
-        foreach (var matId in itemsToGather)
+        foreach (var mat in materialDataList)
         {
-            if (materials.TryGetValue(matId, out var perCraftAmount))
+            if (itemsToGather.Contains(mat.ItemId))
             {
-                int inInventory = inventoryCounts.GetValueOrDefault(matId, 0);
-                float totalRequired = perCraftAmount * craftQuantity;
-                int needed = (int)Math.Ceiling(Math.Max(0, totalRequired - inInventory));
+                int needed = Math.Max(0, mat.TotalNeeded - mat.AmountOwned);
                 
                 if (needed > 0)
                 {
                     // TeamCraft format: itemId,recipeId(null),quantity
-                    exportItems.Add($"{matId},null,{needed}");
+                    exportItems.Add($"{mat.ItemId},null,{needed}");
                 }
             }
         }
@@ -571,4 +820,3 @@ public class MainWindow : Window, IDisposable
         }
     }
 }
-

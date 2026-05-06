@@ -8,6 +8,10 @@ using Dalamud.Plugin.Services;
 using Dalamud.Game.Gui.ContextMenu;
 using CraftAnalyzer.Windows;
 using CraftAnalyzer.Services;
+using CraftAnalyzer.Models;
+using System.Collections.Generic;
+using System.Linq;
+using Lumina.Excel.Sheets;
 
 namespace CraftAnalyzer;
 
@@ -38,6 +42,8 @@ public sealed class Plugin : IDalamudPlugin
     public readonly WindowSystem WindowSystem = new("CraftAnalyzer");
     private ConfigWindow ConfigWindow { get; init; }
     private MainWindow MainWindow { get; init; }
+    
+    public List<CartItem> ShoppingCart { get; } = new();
 
     public Plugin()
     {
@@ -135,13 +141,40 @@ public sealed class Plugin : IDalamudPlugin
         {
             args.AddMenuItem(new MenuItem
             {
-                Name = "See Craft Cost",
+                Name = "Add to Shopping Cart",
                 OnClicked = _ => 
                 {
-                    MainWindow.OpenWithItem(itemId);
+                    AddToCart(itemId);
                 }
             });
         }
+    }
+
+    /// <summary>
+    /// Adds an item to the shopping cart or increments quantity if it exists.
+    /// </summary>
+    public void AddToCart(uint itemId)
+    {
+        var existing = ShoppingCart.FirstOrDefault(x => x.ItemId == itemId);
+        if (existing != null)
+        {
+            existing.Quantity++;
+            ToastGui.ShowNormal($"Incremented {existing.Name} in cart.");
+        }
+        else
+        {
+            var itemRow = DataManager.GetExcelSheet<Item>().GetRow(itemId);
+            var name = itemRow.Name.ToString();
+            ShoppingCart.Add(new CartItem 
+            { 
+                ItemId = itemId, 
+                Name = name, 
+                Quantity = 1 
+            });
+            ToastGui.ShowNormal($"Added {name} to cart.");
+        }
+        
+        MainWindow.IsOpen = true;
     }
     
     public void ToggleConfigUi() => ConfigWindow.Toggle();

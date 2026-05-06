@@ -1,6 +1,9 @@
 using System.Collections.Generic;
 using Dalamud.Plugin.Services;
 using Lumina.Excel.Sheets;
+using CraftAnalyzer.Models;
+using System;
+using System.Linq;
 
 namespace CraftAnalyzer.Services;
 
@@ -131,6 +134,20 @@ public class RecipeParserService
             else
                 baseMaterials[itemId] = quantity;
         }
+    }
+
+    /// <summary>
+    /// Aggregates base materials for a collection of cart items.
+    /// </summary>
+    public Dictionary<uint, int> GetAggregateMaterials(IEnumerable<CartItem> cartItems)
+    {
+        var aggregate = new Dictionary<uint, float>();
+        foreach (var item in cartItems)
+        {
+            ParseRecursive(item.ItemId, item.Quantity, aggregate);
+        }
+
+        return aggregate.ToDictionary(k => k.Key, v => (int)Math.Ceiling(v.Value));
     }
 }
 
