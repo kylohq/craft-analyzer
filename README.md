@@ -2,7 +2,7 @@
 
 **A Final Fantasy XIV Dalamud plugin that calculates the true cost of crafting and your actual profit margins across your entire Region.**
 
-![Plugin Preview](./assets/craftanalyzer.png)
+![Plugin Preview](./craftanalyzer.png)
 
 ## 📖 About
 Figuring out if an item is actually profitable to craft usually involves a lot of alt-tabbing, mental math, and checking multiple servers. 
