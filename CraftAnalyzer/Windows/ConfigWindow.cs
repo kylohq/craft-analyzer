@@ -30,8 +30,17 @@ public class ConfigWindow : Window, IDisposable
         ImGui.Text("CraftAnalyzer Settings");
         ImGui.Separator();
         
-        // Configuration options can be added here
-        ImGui.TextDisabled("No settings available in this version.");
+        var queryEntireRegion = configuration.QueryEntireRegion;
+        if (ImGui.Checkbox("Search entire region instead of data center", ref queryEntireRegion))
+        {
+            configuration.QueryEntireRegion = queryEntireRegion;
+            configuration.Save();
+        }
+        if (ImGui.IsItemHovered())
+        {
+            ImGui.SetTooltip("If enabled, the plugin will search for prices across your entire region (e.g. Europe).\n" +
+                             "If disabled, it will only search your current Data Center (e.g. Chaos).");
+        }
     }
 }
 

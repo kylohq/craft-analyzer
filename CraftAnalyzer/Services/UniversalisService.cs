@@ -22,10 +22,14 @@ public class UniversalisService
     }
     
     private readonly IObjectTable objectTable;
+    private readonly IDataManager dataManager;
+    private readonly Configuration configuration;
 
-    public UniversalisService(IObjectTable objectTable)
+    public UniversalisService(IObjectTable objectTable, IDataManager dataManager, Configuration configuration)
     {
         this.objectTable = objectTable;
+        this.dataManager = dataManager;
+        this.configuration = configuration;
     }
 
     /// <summary>
@@ -48,6 +52,18 @@ public class UniversalisService
     }
 
     /// <summary>
+    /// Gets the data center name of the local player.
+    /// </summary>
+    /// <returns>A string representing the data center name.</returns>
+    public string GetDataCenter()
+    {
+        if (objectTable.LocalPlayer == null || objectTable.LocalPlayer.HomeWorld.RowId == 0) return "Chaos";
+
+        var dc = objectTable.LocalPlayer.HomeWorld.Value.DataCenter.Value;
+        return dc.Name.ToString();
+    }
+
+    /// <summary>
     /// Fetches the lowest prices for multiple items across the current region.
     /// </summary>
     /// <param name="itemIds">The list of item IDs to query.</param>
@@ -58,9 +74,9 @@ public class UniversalisService
         var idList = itemIds.Distinct().ToList();
         if (idList.Count == 0) return results;
 
-        var region = GetRegion();
+        var scope = configuration.QueryEntireRegion ? GetRegion() : GetDataCenter();
         var commaSeparatedIds = string.Join(",", idList);
-        var url = $"https://universalis.app/api/v2/{region}/{commaSeparatedIds}?listings=5";
+        var url = $"https://universalis.app/api/v2/{scope}/{commaSeparatedIds}?listings=5";
 
         try
         {
@@ -96,7 +112,7 @@ public class UniversalisService
         }
         catch (Exception ex)
         {
-            Plugin.Log.Error(ex, $"Failed to fetch region prices for {region}");
+            Plugin.Log.Error(ex, $"Failed to fetch prices for {scope}");
         }
 
         return results;

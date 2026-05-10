@@ -42,6 +42,7 @@ public sealed class Plugin : IDalamudPlugin
     public readonly WindowSystem WindowSystem = new("CraftAnalyzer");
     private ConfigWindow ConfigWindow { get; init; }
     private MainWindow MainWindow { get; init; }
+    private ChangelogWindow ChangelogWindow { get; init; }
     
     public List<CartItem> ShoppingCart { get; } = new();
 
@@ -50,13 +51,24 @@ public sealed class Plugin : IDalamudPlugin
         Configuration = PluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
 
         RecipeParser = new RecipeParserService(DataManager);
-        Universalis = new UniversalisService(ObjectTable);
+        Universalis = new UniversalisService(ObjectTable, DataManager, Configuration);
 
         ConfigWindow = new ConfigWindow(this);
         MainWindow = new MainWindow(this);
+        ChangelogWindow = new ChangelogWindow(this);
 
         WindowSystem.AddWindow(ConfigWindow);
         WindowSystem.AddWindow(MainWindow);
+        WindowSystem.AddWindow(ChangelogWindow);
+
+        // Version check for changelog
+        var currentVersion = PluginInterface.Manifest.AssemblyVersion.ToString();
+        if (Configuration.LastSeenVersion != currentVersion)
+        {
+            Configuration.LastSeenVersion = currentVersion;
+            Configuration.Save();
+            ChangelogWindow.IsOpen = true;
+        }
 
         ContextMenu.OnMenuOpened += OnMenuOpened;
 
@@ -84,6 +96,7 @@ public sealed class Plugin : IDalamudPlugin
 
         ConfigWindow.Dispose();
         MainWindow.Dispose();
+        ChangelogWindow.Dispose();
 
         CommandManager.RemoveHandler(CommandName);
     }
