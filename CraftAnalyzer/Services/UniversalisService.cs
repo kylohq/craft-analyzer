@@ -75,44 +75,50 @@ public class UniversalisService
         if (idList.Count == 0) return results;
 
         var scope = configuration.QueryEntireRegion ? GetRegion() : GetDataCenter();
-        var commaSeparatedIds = string.Join(",", idList);
-        var url = $"https://universalis.app/api/v2/{scope}/{commaSeparatedIds}?listings=5";
+        var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
 
-        try
+        // Universalis API limits bulk requests to 100 items at a time
+        for (int i = 0; i < idList.Count; i += 100)
         {
-            var response = await HttpClient.GetStringAsync(url);
-            var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
-            
-            var data = JsonSerializer.Deserialize<UniversalisResponse>(response, options);
-            if (data?.Items != null)
+            var chunk = idList.Skip(i).Take(100).ToList();
+            var commaSeparatedIds = string.Join(",", chunk);
+            var url = $"https://universalis.app/api/v2/{scope}/{commaSeparatedIds}?listings=5";
+
+            try
             {
-                foreach (var entry in data.Items)
+                var response = await HttpClient.GetStringAsync(url);
+                
+                var data = JsonSerializer.Deserialize<UniversalisResponse>(response, options);
+                if (data?.Items != null)
                 {
-                    var lowest = entry.Value.Listings.OrderBy(l => l.PricePerUnit).FirstOrDefault();
-                    if (lowest != null) 
+                    foreach (var entry in data.Items)
                     {
-                        results[entry.Value.ItemID] = (lowest.PricePerUnit, lowest.WorldName);
+                        var lowest = entry.Value.Listings.OrderBy(l => l.PricePerUnit).FirstOrDefault();
+                        if (lowest != null) 
+                        {
+                            results[entry.Value.ItemID] = (lowest.PricePerUnit, lowest.WorldName);
+                        }
+                    }
+                }
+                else
+                {
+                    // Fallback for single item responses returned in a non-dictionary format
+                    var single = JsonSerializer.Deserialize<ItemData>(response, options);
+                    if (single != null)
+                    {
+                        var lowest = single.Listings.OrderBy(l => l.PricePerUnit).FirstOrDefault();
+                        if (lowest != null) 
+                        {
+                            uint id = single.ItemID == 0 ? chunk[0] : single.ItemID;
+                            results[id] = (lowest.PricePerUnit, lowest.WorldName);
+                        }
                     }
                 }
             }
-            else
+            catch (Exception ex)
             {
-                // Fallback for single item responses returned in a non-dictionary format
-                var single = JsonSerializer.Deserialize<ItemData>(response, options);
-                if (single != null)
-                {
-                    var lowest = single.Listings.OrderBy(l => l.PricePerUnit).FirstOrDefault();
-                    if (lowest != null) 
-                    {
-                        uint id = single.ItemID == 0 ? idList[0] : single.ItemID;
-                        results[id] = (lowest.PricePerUnit, lowest.WorldName);
-                    }
-                }
+                Plugin.Log.Error(ex, $"Failed to fetch prices for {scope} in chunk {i / 100}");
             }
-        }
-        catch (Exception ex)
-        {
-            Plugin.Log.Error(ex, $"Failed to fetch prices for {scope}");
         }
 
         return results;
