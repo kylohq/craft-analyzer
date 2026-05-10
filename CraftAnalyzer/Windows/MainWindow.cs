@@ -28,10 +28,10 @@ public class MainWindow : Window, IDisposable
     private bool isLoading = false;
     private List<MaterialData> materialDataList = new();
     private Dictionary<uint, (int Price, string World)> prices = new();
-    private float totalMaterialCost = 0; // Cumulative cost of materials to buy
-    private float targetItemPrice = 0;    // Market price of the primary target item
-    private float totalMarketValue = 0;   // Summed market value of all items in current plan
-    private Dictionary<uint, int> targetPricesHomeWorld = new(); // Cached home-world prices for cart items
+    private float totalMaterialCost = 0;
+    private float targetItemPrice = 0;
+    private float totalMarketValue = 0;
+    private Dictionary<uint, int> targetPricesHomeWorld = new();
 
     private string searchInput = "";
     private List<Item> searchResults = new();
@@ -44,7 +44,6 @@ public class MainWindow : Window, IDisposable
     private string playerWorldName = "N/A";
     private bool lastFetchFailed = false;
     
-    // Tracks items marked to be gathered manually, excluding them from cost analysis.
     private HashSet<uint> itemsToGather = new();
 
     private bool isCartMode = false;
@@ -246,6 +245,16 @@ public class MainWindow : Window, IDisposable
                 ImGui.TextDisabled("|");
                 ImGui.SameLine();
                 ImGui.TextDisabled($"{plugin.ShoppingCart.Count} items added");
+                
+                ImGui.SameLine();
+                ImGui.SetCursorPosX(ImGui.GetContentRegionMax().X - 160 * ImGuiHelpers.GlobalScale);
+                string btnText = plugin.Configuration.ShowPreCraftView ? "Switch to material view" : "Switch to pre-craft view";
+                if (ImGui.SmallButton(btnText))
+                {
+                    plugin.Configuration.ShowPreCraftView = !plugin.Configuration.ShowPreCraftView;
+                    plugin.Configuration.Save();
+                    RecomputeMaterials();
+                }
             }
             else
             {
@@ -264,6 +273,16 @@ public class MainWindow : Window, IDisposable
                 }
                 ImGui.SameLine();
                 ImGui.TextDisabled("ct.");
+
+                ImGui.SameLine();
+                ImGui.SetCursorPosX(ImGui.GetContentRegionMax().X - 160 * ImGuiHelpers.GlobalScale);
+                string btnTextSingle = plugin.Configuration.ShowPreCraftView ? "Switch to material view" : "Switch to pre-craft view";
+                if (ImGui.SmallButton(btnTextSingle))
+                {
+                    plugin.Configuration.ShowPreCraftView = !plugin.Configuration.ShowPreCraftView;
+                    plugin.Configuration.Save();
+                    RecomputeMaterials();
+                }
             }
             
             ImGui.Spacing();
@@ -356,8 +375,8 @@ public class MainWindow : Window, IDisposable
         Dictionary<uint, int> aggregate;
         if (isCartMode)
         {
-            // Recalculate the entire recursive material tree for all items in the shopping cart
-            aggregate = Plugin.RecipeParser.GetAggregateMaterials(plugin.ShoppingCart);
+            // Recalculate the material tree for all items in the shopping cart
+            aggregate = Plugin.RecipeParser.GetAggregateMaterials(plugin.ShoppingCart, !plugin.Configuration.ShowPreCraftView);
             
             // Re-calculate projected revenue based on current quantities and cached home-world prices
             totalMarketValue = 0;
@@ -371,8 +390,8 @@ public class MainWindow : Window, IDisposable
         }
         else
         {
-            // Calculate material requirements for a single item multi-crafted N times
-            var single = Plugin.RecipeParser.GetBaseMaterials(searchItemId, craftQuantity);
+            // Calculate material requirements for a single item
+            var single = Plugin.RecipeParser.GetBaseMaterials(searchItemId, craftQuantity, !plugin.Configuration.ShowPreCraftView);
             aggregate = single.ToDictionary(k => k.Key, v => (int)Math.Ceiling(v.Value));
             totalMarketValue = targetItemPrice * craftQuantity;
         }
@@ -405,15 +424,22 @@ public class MainWindow : Window, IDisposable
         
         foreach (var mat in materialDataList)
         {
-            if (prices.TryGetValue(mat.ItemId, out var priceData))
+            int needed = Math.Max(0, mat.TotalNeeded - mat.AmountOwned);
+            if (needed <= 0) continue;
+
+            // Check Vendor Price
+            var vendor = Plugin.VendorService.GetCheapestVendor(mat.ItemId);
+            bool hasMbPrice = prices.TryGetValue(mat.ItemId, out var priceData);
+            
+            int mbPrice = hasMbPrice ? priceData.Price : int.MaxValue;
+            int vendorPrice = vendor != null ? (int)vendor.Cost : int.MaxValue;
+
+            int bestPrice = Math.Min(mbPrice, vendorPrice);
+            if (bestPrice == int.MaxValue) bestPrice = 0;
+
+            if (!itemsToGather.Contains(mat.ItemId))
             {
-                int needed = Math.Max(0, mat.TotalNeeded - mat.AmountOwned);
-                
-                // Exclude cost if the item is marked as "to be gathered"
-                if (!itemsToGather.Contains(mat.ItemId))
-                {
-                    totalMaterialCost += needed * priceData.Price;
-                }
+                totalMaterialCost += (long)needed * bestPrice;
             }
         }
     }
@@ -429,19 +455,30 @@ public class MainWindow : Window, IDisposable
         try
         {
             Dictionary<uint, int> aggregate;
+            HashSet<uint> allNeededIds = new();
             if (isCartMode)
             {
-                aggregate = Plugin.RecipeParser.GetAggregateMaterials(plugin.ShoppingCart);
+                var recursive = Plugin.RecipeParser.GetAggregateMaterials(plugin.ShoppingCart, true);
+                var immediate = Plugin.RecipeParser.GetAggregateMaterials(plugin.ShoppingCart, false);
+                foreach (var id in recursive.Keys) allNeededIds.Add(id);
+                foreach (var id in immediate.Keys) allNeededIds.Add(id);
+                
+                aggregate = plugin.Configuration.ShowPreCraftView ? immediate : recursive;
             }
             else
             {
-                var single = Plugin.RecipeParser.GetBaseMaterials(searchItemId, craftQuantity);
-                aggregate = single.ToDictionary(k => k.Key, v => (int)Math.Ceiling(v.Value));
+                var recursive = Plugin.RecipeParser.GetBaseMaterials(searchItemId, craftQuantity, true);
+                var immediate = Plugin.RecipeParser.GetBaseMaterials(searchItemId, craftQuantity, false);
+                foreach (var id in recursive.Keys.Select(k => k)) allNeededIds.Add(id);
+                foreach (var id in immediate.Keys.Select(k => k)) allNeededIds.Add(id);
+                
+                var selected = plugin.Configuration.ShowPreCraftView ? immediate : recursive;
+                aggregate = selected.ToDictionary(k => k.Key, v => (int)Math.Ceiling(v.Value));
             }
 
-            if (aggregate.Count == 0) return;
+            if (allNeededIds.Count == 0) return;
 
-            var itemIds = aggregate.Keys.ToList();
+            var itemIds = allNeededIds.ToList();
             UpdateInventoryCounts(itemIds);
 
             materialDataList.Clear();
@@ -456,8 +493,7 @@ public class MainWindow : Window, IDisposable
                 ));
             }
 
-            // Query prices for ALL materials in the list to ensure we have data if quantities change
-            var idsToQuery = materialDataList.Select(m => m.ItemId).ToList();
+            var idsToQuery = allNeededIds.ToList();
             
             // Initiate parallel market data requests
             var materialsTask = idsToQuery.Count > 0 
@@ -615,12 +651,30 @@ public class MainWindow : Window, IDisposable
 
                 // Unit Price
                 ImGui.TableNextColumn();
-                bool hasPrice = prices.TryGetValue(mat.ItemId, out var priceData);
-                int price = hasPrice ? priceData.Price : 0;
+                bool hasMbPrice = prices.TryGetValue(mat.ItemId, out var priceData);
+                var vendor = Plugin.VendorService.GetCheapestVendor(mat.ItemId);
                 
-                if (hasPrice)
+                int mbPrice = hasMbPrice ? priceData.Price : int.MaxValue;
+                int vendorPrice = vendor != null ? (int)vendor.Cost : int.MaxValue;
+                int displayPrice = Math.Min(mbPrice, vendorPrice);
+                if (displayPrice == int.MaxValue) displayPrice = 0;
+
+                if (vendorPrice < mbPrice && vendorPrice != int.MaxValue)
                 {
-                    ImGui.Text($"{price:N0}g");
+                    ImGui.TextColored(new Vector4(0.4f, 1, 0.4f, 1), $"{vendorPrice:N0}g (V)");
+                    if (ImGui.IsItemHovered() && vendor != null)
+                    {
+                        ImGui.SetTooltip($"Sold by {vendor.NpcName} (Cheaper than MB)");
+                    }
+                    
+                }
+                else if (hasMbPrice)
+                {
+                    ImGui.Text($"{mbPrice:N0}g");
+                    if (vendor != null && ImGui.IsItemHovered())
+                    {
+                        ImGui.SetTooltip($"Also sold by {vendor.NpcName} for {vendor.Cost:N0}g");
+                    }
                 }
                 else
                 {
@@ -629,7 +683,8 @@ public class MainWindow : Window, IDisposable
 
                 // Server
                 ImGui.TableNextColumn();
-                string world = prices.TryGetValue(mat.ItemId, out var worldData) ? worldData.World : (lastFetchFailed ? "Error" : "N/A");
+                string world = hasMbPrice ? priceData.World : (lastFetchFailed ? "Error" : "N/A");
+                if (vendorPrice < mbPrice && vendorPrice != int.MaxValue) world = "Vendor";
                 ImGui.TextColored(new Vector4(0.7f, 0.7f, 1, 1), world);
 
                 // Subtotal
@@ -640,7 +695,7 @@ public class MainWindow : Window, IDisposable
                 }
                 else
                 {
-                    long subtotal = (long)toBuy * price;
+                    long subtotal = (long)toBuy * displayPrice;
                     ImGui.Text($"{subtotal:N0}g");
                 }
             }

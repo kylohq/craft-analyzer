@@ -77,7 +77,6 @@ public class UniversalisService
         var scope = configuration.QueryEntireRegion ? GetRegion() : GetDataCenter();
         var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
 
-        // Universalis API limits bulk requests to 100 items at a time
         for (int i = 0; i < idList.Count; i += 100)
         {
             var chunk = idList.Skip(i).Take(100).ToList();
@@ -102,7 +101,6 @@ public class UniversalisService
                 }
                 else
                 {
-                    // Fallback for single item responses returned in a non-dictionary format
                     var single = JsonSerializer.Deserialize<ItemData>(response, options);
                     if (single != null)
                     {

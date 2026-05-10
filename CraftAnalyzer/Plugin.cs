@@ -34,6 +34,7 @@ public sealed class Plugin : IDalamudPlugin
 
     public static RecipeParserService RecipeParser { get; private set; } = null!;
     public static UniversalisService Universalis { get; private set; } = null!;
+    public static VendorService VendorService { get; private set; } = null!;
 
     private const string CommandName = "/craftanalyzer";
 
@@ -52,6 +53,7 @@ public sealed class Plugin : IDalamudPlugin
 
         RecipeParser = new RecipeParserService(DataManager);
         Universalis = new UniversalisService(ObjectTable, DataManager, Configuration);
+        VendorService = new VendorService(DataManager);
 
         ConfigWindow = new ConfigWindow(this);
         MainWindow = new MainWindow(this);
@@ -154,7 +156,7 @@ public sealed class Plugin : IDalamudPlugin
         {
             args.AddMenuItem(new MenuItem
             {
-                Name = "Add to Shopping Cart",
+                Name = "Add to CraftAnalyzer",
                 OnClicked = _ => 
                 {
                     AddToCart(itemId);

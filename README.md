@@ -13,12 +13,14 @@ It then compares that cost against the lowest selling price of the item on your 
 
 ## ✨ Features
 * **Seamless Context Menu Integration:** Right-click any craftable item in your inventory, Crafting Log, or chat box and select **"See craft cost"**.
-* **Region-Wide:** Automatically finds the absolute cheapest price for base materials across your entire physical region (e.g., Europe) and tells you exactly which server to travel to.
+* **Smart Region & DC Queries:** Automatically finds the absolute cheapest price for base materials across your entire region (e.g., Europe) or your specific Data Center (e.g., Chaos), telling you exactly which server to travel to.
+* **Vendor Integration:** Automatically identifies materials sold by NPCs. If a vendor price is lower than the Market Board, the plugin uses it for cost calculations.
+* **Pre-craft vs Material View:** Toggle between in-depth materials and immediate pre-crafts to decide if you want to buy pre-crafts or gather from scratch.
 * **Smart Recipe Parsing:** Accurately accounts for recipe yields (e.g., crafting x3 Ingots) so your per-unit math is always flawless. 
 * **Home World Profit Margins:** Compares your regional material costs against the selling price on your specific Home World, color-coding your net profit in green or red.
 * **Search UI:** Includes a standalone search bar to manually look up items if you don't have them on hand.
 * **TeamCraft Integration**: Click the **"Export to TeamCraft"** button to automatically generate a TeamCraft import link for all items you need to gather.
-* **Smart Gathering Tracking**: Check the box next to each material to mark it as "To Be Gathered". The plugin will automatically adjust costs, exclude those items from total cost.
+* **Smart Gathering Tracking**: Check the box next to each material to mark it as "To Be Gathered". The plugin will automatically adjust costs and exclude those items from total cost.
 
 ## 📥 Installation
 This plugin is only distributed via a Custom Repository, because a lot of it is written by AI and moderated by myself. For any suggestions/bugs please use GitHub discussions or add me on Discord at rxfio.

@@ -13,6 +13,7 @@ public class Configuration : IPluginConfiguration
     
     public bool QueryEntireRegion { get; set; } = false;
     public string LastSeenVersion { get; set; } = string.Empty;
+    public bool ShowPreCraftView { get; set; } = false;
 
     /// <summary>
     /// Persists the current configuration to disk.

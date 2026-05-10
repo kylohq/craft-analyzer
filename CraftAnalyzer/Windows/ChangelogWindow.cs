@@ -28,24 +28,30 @@ public class ChangelogWindow : Window, IDisposable
     public override void Draw()
     {
         ImGui.TextColored(ImGuiColors.ParsedGold, "Thank you for using CraftAnalyzer!");
-        ImGui.Text("Latest Updates (v1.0.3.0):");
+        ImGui.Text("Latest Updates (v1.0.4.0):");
         ImGui.Separator();
 
         if (ImGui.BeginChild("ChangelogContent"))
         {
-            DrawBullet("Added Data Center specific market queries.");
+            DrawBullet("Vulcan-style Vendor Integration");
             ImGui.Indent();
-            ImGui.TextWrapped("The plugin now defaults to searching only your current Data Center (e.g. Chaos or Light).");
+            ImGui.TextWrapped("The plugin now automatically finds NPC vendors. If an item is sold by a vendor for less than the Market Board price, it will use the vendor price for all calculations.");
+            ImGui.TextWrapped("Right-click a vendor price (marked with 'V') to set a map marker to the NPC!");
             ImGui.Unindent();
 
-            DrawBullet("New Settings Toggle.");
+            DrawBullet("Pre-craft vs Material View");
             ImGui.Indent();
-            ImGui.TextWrapped("You can switch back to region-wide searches in the plugin settings if you prefer scanning the entire region.");
+            ImGui.TextWrapped("Toggle between deep recursive breakdowns and immediate pre-craft ingredients using the new button in the analysis header.");
             ImGui.Unindent();
 
-            DrawBullet("Changelog UI.");
+            DrawBullet("Data Center Specific Queries");
             ImGui.Indent();
-            ImGui.TextWrapped("You are looking at it! A new window will now inform you of changes after every update.");
+            ImGui.TextWrapped("Queries now default to your current Data Center for more relevant pricing. You can revert this to Region-wide in settings.");
+            ImGui.Unindent();
+
+            DrawBullet("Under the Hood");
+            ImGui.Indent();
+            ImGui.TextWrapped("Implemented request chunking for Universalis to handle 100+ items and optimized startup indexing for lightning-fast performance.");
             ImGui.Unindent();
 
             ImGui.Spacing();
